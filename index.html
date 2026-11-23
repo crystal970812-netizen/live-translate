@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>離線即時翻譯字幕</title>
+<style>
+:root{
+  --bg1:#0b1020; --bg2:#1a2147; --accent:#7cc4ff; --accent2:#c49bff;
+  --text:#f3f5ff; --muted:#8e97c2; --card:rgba(255,255,255,.06);
+  --fs-src:2.1rem; --fs-tr:3rem;
+  --sans:"PingFang TC","Noto Sans TC","Microsoft JhengHei","Heiti TC",system-ui,sans-serif;
+  --serif:"Noto Serif TC","Songti TC","PMingLiU","Source Han Serif TC",Georgia,serif;
+}
+body.light{--bg1:#f6f4ef; --bg2:#e7ecf7; --text:#1c2033; --muted:#6b7290; --card:rgba(0,0,0,.05); --accent:#2368c4; --accent2:#7b3fc4;}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--sans);color:var(--text);
+  background:radial-gradient(1200px 700px at 15% 10%,var(--bg2),transparent 60%),
+             radial-gradient(900px 600px at 90% 90%,#2a1846,transparent 60%),var(--bg1);
+  overflow:hidden;transition:background .4s}
+body.light{background:linear-gradient(135deg,var(--bg1),var(--bg2))}
+body.chroma{background:#00b140 !important}
+
+.bar{position:fixed;top:0;left:0;right:0;display:flex;gap:.55rem;align-items:center;flex-wrap:wrap;
+  padding:.75rem 1.2rem;background:rgba(10,14,30,.6);backdrop-filter:blur(12px);z-index:10;transition:opacity .4s,transform .4s}
+body.light .bar{background:rgba(255,255,255,.75)}
+body.present .bar{opacity:0;transform:translateY(-100%)}
+body.present .bar:hover{opacity:1;transform:none}
+.hot{position:fixed;top:0;left:0;right:0;height:14px;z-index:9}
+body.present .hot:hover + .bar{opacity:1;transform:none}
+.brand{font-weight:700;letter-spacing:.05em;margin-right:auto;display:flex;align-items:center;gap:.55rem}
+.dot{width:10px;height:10px;border-radius:50%;background:#555}
+.dot.on{background:#ff4d6d;animation:pulse 1.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,77,109,.7)}70%{box-shadow:0 0 0 12px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.meter{width:54px;height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .08s}
+.badge{font-size:.72rem;font-weight:500;padding:.18rem .55rem;border-radius:999px;border:1px solid rgba(255,255,255,.2);color:var(--muted)}
+.badge.ok{color:#5fe3a1;border-color:rgba(95,227,161,.5)}
+.badge.warn{color:#ffc46b;border-color:rgba(255,196,107,.5)}
+select,button,input[type=range]{font:inherit;font-size:.88rem}
+select,button{background:var(--card);color:var(--text);border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:.42rem .75rem;cursor:pointer}
+body.light select,body.light button{border-color:rgba(0,0,0,.15)}
+select option{color:#000}
+button.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0b1020;border:none;font-weight:700}
+button:disabled{opacity:.5;cursor:wait}
+label.sm{font-size:.78rem;color:var(--muted);display:flex;align-items:center;gap:.3rem}
+
+.stage{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;padding:6.5rem 8vw 7vh;gap:1.4rem}
+.history{display:flex;flex-direction:column;gap:1.2rem;overflow:hidden;mask-image:linear-gradient(to bottom,transparent,black 45%);-webkit-mask-image:linear-gradient(to bottom,transparent,black 45%)}
+.line{animation:rise .6s cubic-bezier(.2,.8,.2,1) both}
+.line .src{font-size:calc(var(--fs-src)*.62);color:var(--muted);font-weight:300;line-height:1.4}
+.line .tr{font-family:var(--serif);font-size:calc(var(--fs-tr)*.62);line-height:1.35;opacity:.78}
+.line .tr.pending{opacity:.3}
+.current{background:var(--card);border-left:4px solid;border-image:linear-gradient(var(--accent),var(--accent2)) 1;
+  padding:1.6rem 2rem;border-radius:4px 18px 18px 4px;min-height:9rem;backdrop-filter:blur(6px)}
+.current .src{font-size:var(--fs-src);color:var(--muted);font-weight:300;line-height:1.45;min-height:1.4em}
+.current .src .interim{opacity:.55}
+.current .tr.live{opacity:.55}
+.current .src .listening{display:inline-flex;gap:.35rem;vertical-align:middle}
+.current .src .listening b{width:.45rem;height:.45rem;border-radius:50%;background:var(--muted);animation:blink 1s infinite}
+.current .src .listening b:nth-child(2){animation-delay:.15s}.current .src .listening b:nth-child(3){animation-delay:.3s}
+@keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
+.current .tr{font-family:var(--serif);font-weight:700;font-size:var(--fs-tr);line-height:1.3;margin-top:.5rem;
+  background:linear-gradient(90deg,var(--text),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent;min-height:1.3em}
+.current .tr.fade{animation:fadein .7s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+@keyframes fadein{from{opacity:0;filter:blur(6px)}to{opacity:1;filter:none}}
+.hint{color:var(--muted);font-size:1.05rem;line-height:1.7}
+.status{position:fixed;bottom:1rem;right:1.4rem;font-size:.78rem;color:var(--muted)}
+body.present .status{opacity:.35}
+.typer{display:none;gap:.5rem}
+#vocabIn{width:100%;font:inherit;font-size:1rem;margin-top:.6rem;padding:.6rem .8rem;border-radius:10px;border:1px solid rgba(255,255,255,.2);background:rgba(0,0,0,.25);color:inherit;resize:vertical}
+#swap{padding:.35rem .6rem}
+.typer.show{display:flex}
+.typer input{flex:1;font:inherit;padding:.6rem 1rem;border-radius:10px;border:1px solid rgba(255,255,255,.2);background:var(--card);color:var(--text)}
+body.chroma .current{background:rgba(0,0,0,.6)}
+body.chroma .history{display:none}
+
+/* 下載進度 */
+.overlay{position:fixed;inset:0;display:none;place-items:center;background:rgba(5,8,20,.72);backdrop-filter:blur(8px);z-index:20}
+.overlay.show{display:grid}
+.panel{width:min(560px,90vw);background:#141a36;border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:1.8rem 2rem;color:#eef1ff}
+.panel h2{font-size:1.25rem;margin-bottom:.4rem}
+.panel p{color:#9aa3cc;font-size:.9rem;line-height:1.6}
+.prog{margin-top:1.1rem;height:10px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}
+.prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,#7cc4ff,#c49bff);transition:width .25s}
+.prog-row{display:flex;justify-content:space-between;font-size:.8rem;color:#9aa3cc;margin-top:.5rem;font-variant-numeric:tabular-nums}
+.steps{margin-top:1rem;font-size:.85rem;line-height:1.9;color:#cdd3f2;list-style:none}
+.steps li::before{content:"○ ";color:#6b7290}
+.steps li.done::before{content:"✓ ";color:#5fe3a1}
+.steps li.doing::before{content:"◐ ";color:#7cc4ff}
+.panel .err{color:#ff8fa3;margin-top:1rem;font-size:.85rem;white-space:pre-wrap}
+.panel button{margin-top:1.2rem}
+</style>
+</head>
+<body>
+<div class="hot"></div>
+<div class="bar">
+  <div class="brand"><span class="dot" id="dot"></span>離線即時翻譯字幕 <span class="meter"><i id="meter"></i></span>
+    <span class="badge" id="netBadge">—</span><span class="badge" id="readyBadge">尚未下載模型</span> <span class="badge ok" id="dirBadge">🎤 中文 → English</span></div>
+  <label class="sm">說話語言
+    <select id="srcLang">
+      <option value="zh" selected>中文</option>
+      <option value="en">English</option>
+      <option value="ja">日本語</option>
+      <option value="ko">한국어</option>
+      <option value="fr">Français</option>
+      <option value="de">Deutsch</option>
+      <option value="es">Español</option>
+    </select></label>
+  <button id="swap" title="對調說話語言和翻譯語言">⇄</button>
+  <label class="sm">翻成
+    <select id="tgtLang">
+      <option value="zh">中文（繁體）</option>
+      <option value="en" selected>English</option>
+      <option value="ja">日本語</option>
+      <option value="ko">한국어</option>
+      <option value="fr">Français</option>
+      <option value="de">Deutsch</option>
+      <option value="es">Español</option>
+    </select></label>
+  <label class="sm">辨識引擎
+    <select id="engine">
+      <option value="sense" selected>中文離線辨識（快、準・建議）</option>
+      <option value="chrome">Chrome 語音辨識（需網路）</option>
+      <option value="whisper">Whisper 模型（完全離線、較慢）</option>
+    </select></label>
+  <label class="sm">翻譯
+    <select id="trMode">
+      <option value="auto" selected>自動（有網路用線上翻譯）</option>
+      <option value="local">只用本機翻譯</option>
+    </select></label>
+  <label class="sm" id="qualityWrap">Whisper 品質
+    <select id="quality">
+      <option value="onnx-community/whisper-base">標準（較快）</option>
+      <option value="onnx-community/whisper-small">高準確（約 250 MB）</option>
+      <option value="onnx-community/whisper-large-v3-turbo">最準確・中文建議（約 1 GB，需較好的電腦）</option>
+    </select></label>
+  <label class="sm">斷句停頓 <select id="pause"><option value="500">短</option><option value="600" selected>中</option><option value="1100">長</option></select></label>
+  <label class="sm">字級 <input type="range" id="size" min="0.6" max="1.8" step="0.1" value="1"></label>
+  <select id="theme"><option value="dark">深色</option><option value="light">淺色</option><option value="chroma">綠幕（疊加用）</option></select>
+  <button id="typeBtn" title="改用打字輸入">⌨</button>
+  <button id="vocabBtn" title="專有名詞與聽錯修正">📖 詞彙</button>
+  <button id="present">簡報模式</button>
+  <button id="clear">清除</button>
+  <button id="prep">⬇ 下載離線模型</button>
+  <button class="primary" id="start">▶ 開始收音</button>
+</div>
+
+<div class="stage">
+  <div class="history" id="history"></div>
+  <div class="current">
+    <div class="src" id="curSrc"><span class="hint">按「▶ 開始收音」（或空白鍵）就能用，邊講邊出字。<br>預設的「中文離線辨識」已內含在資料夾裡，不用網路也能辨識。</span></div>
+    <div class="tr" id="curTr"></div>
+  </div>
+  <div class="typer" id="typer"><input id="typeIn" placeholder="輸入句子後按 Enter 翻譯（不需麥克風）"></div>
+</div>
+<div class="status" id="status">就緒</div>
+
+<div class="overlay" id="ov"><div class="panel">
+  <h2 id="ovTitle">準備離線模型</h2>
+  <p id="ovDesc">第一次需要下載模型到這台電腦，之後就不用再下載，也不需要網路。</p>
+  <ul class="steps"><li id="stAsr">語音辨識模型</li><li id="stMt">翻譯模型</li></ul>
+  <div class="prog"><i id="ovBar"></i></div>
+  <div class="prog-row"><span id="ovFile">&nbsp;</span><span id="ovBytes"></span></div>
+  <div class="err" id="ovErr"></div>
+  <button id="ovClose" style="display:none">關閉</button>
+</div></div>
+
+<div class="overlay" id="vocab"><div class="panel">
+  <h2>📖 專有名詞與聽錯修正</h2>
+  <p>每行一個。<b>專有名詞</b>（人名、公司、產品）會提示辨識器優先聽成這個詞；<b>「聽錯=正確」</b>會在翻譯前自動改掉常聽錯的字。</p>
+  <textarea id="vocabIn" rows="9" placeholder="台積電
+黃仁勳
+輝達=NVIDIA
+機器學系=機器學習"></textarea>
+  <p style="font-size:.85rem;margin-top:.4rem">例：寫「輝達=NVIDIA」，辨識出「輝達」就會換成「NVIDIA」再翻譯。設定會記在這台電腦上。</p>
+  <button id="vocabSave">儲存</button>
+</div></div>
+
+<div class="overlay" id="sbx"><div class="panel">
+  <h2>這個網址不能收音，請改用本機版</h2>
+  <p>分享網址有安全限制：瀏覽器在這裡<b>不允許使用麥克風</b>，也<b>不能把模型存起來</b>離線使用。<br>在這裡只能用「⌨ 打字翻譯」，而且每次開啟都要重新下載模型。</p>
+  <p style="margin-top:.8rem">要即時收音、斷網使用，請下載本機版到你的電腦：</p>
+  <p style="margin-top:.6rem"><a id="zipLink" style="color:#7cc4ff;font-weight:700" target="_blank" rel="noopener">⬇ 下載本機版（zip）</a></p>
+  <p style="margin-top:.6rem;font-size:.85rem">解壓縮後：Windows 點兩下「啟動-Windows.bat」，Mac 對「啟動-Mac.command」按右鍵 →「打開」。瀏覽器會自動打開本機版網頁，之後的操作和這裡一樣。</p>
+  <button id="sbxClose">知道了</button>
+</div></div>
+
+<script src="vendor/opencc-cn2t.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const toTW = (window.OpenCC ? OpenCC.Converter({ from: 'cn', to: 'twp' }) : s => s);
+const MAX_HISTORY = 4, SR = 16000;
+/* 分享網址是受限制的沙盒：不能用麥克風，也不能把模型存在瀏覽器裡 */
+const SANDBOXED = self.origin === 'null';
+let memLS = {};
+const LS = {
+  get k(){ try { return JSON.parse(localStorage.getItem('lt-ready') || '{}'); } catch (_) { return memLS; } },
+  set(key){ const o = this.k; o[key] = 1; try { localStorage.setItem('lt-ready', JSON.stringify(o)); } catch (_) { memLS = o; } }
+};
+
+/* ---------- 離線外殼 ---------- */
+try { if (!SANDBOXED && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (_) {}
+try { if (!SANDBOXED) navigator.storage?.persist?.()?.catch?.(() => {}); } catch (_) {}
+function netBadge(){ const b = $('netBadge'); b.textContent = navigator.onLine ? '連線中' : '離線中'; b.className = 'badge ' + (navigator.onLine ? '' : 'warn'); }
+addEventListener('online', netBadge); addEventListener('offline', netBadge); netBadge();
+
+/* ---------- 翻譯路線 ---------- */
+const OPUS = new Set(['en-zh','zh-en','ja-en','ko-en','en-fr','fr-en','en-de','de-en','en-es','es-en','de-es','de-fr','es-de','es-fr','fr-de','fr-es']);
+const CHROME_CODE = { zh: 'zh-Hant', en: 'en', ja: 'ja', ko: 'ko', fr: 'fr', de: 'de', es: 'es' };
+function opusSteps(s, t){
+  if (s === t) return [];
+  if (OPUS.has(`${s}-${t}`)) return [{ model: `Xenova/opus-mt-${s}-${t}`, opts: {} }];
+  if (OPUS.has(`${s}-en`) && OPUS.has(`en-${t}`)) return [{ model: `Xenova/opus-mt-${s}-en`, opts: {} }, { model: `Xenova/opus-mt-en-${t}`, opts: {} }];
+  return [{ model: 'Xenova/m2m100_418M', opts: { src_lang: s, tgt_lang: t } }];
+}
+function routeSig(){ return $('srcLang').value + '>' + $('tgtLang').value; }
+
+/* ---------- 背景執行緒 ---------- */
+/* 一般網址直接開背景執行緒；分享網址（沙盒）不允許，改用 blob 方式載入 */
+async function mkWorker(f){
+  try { return new Worker(f, { type: 'module' }); } catch (_) {}
+  const base = new URL('./', location.href).href;
+  let code = await (await fetch(new URL(f, base))).text();
+  code = code.split("'./vendor/").join("'" + base + "vendor/").split('import.meta.url').join(JSON.stringify(base));
+  // 沙盒裡只能用一般（非 module）執行緒：把 import 改成動態載入，並先暫存載入完成前收到的訊息
+  code = code.replace(/^import\s*\{([^}]*)\}\s*from\s*('[^']+');/m, 'const {$1} = await import($2);');
+  code = 'const __q = []; self.onmessage = e => __q.push(e);\n(async () => {\n' + code +
+         '\nfor (const e of __q) self.onmessage(e);\n})().catch(e => postMessage({ type: "error", fatal: true, message: String(e && e.message || e) }));';
+  return new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+}
+let asrW = null, mtW = null, whisperW = null, senseW = null;
+function hookAsr(w){
+  w.onerror = e => waiters.asr?.rej(new Error('語音辨識引擎無法啟動 ' + (e.message || '')));
+  w.onmessage = e => {
+    const m = e.data;
+    if (w !== asrW && m.type !== 'progress') return;
+    if (m.type === 'progress') return onProgress(m);
+    if (m.type === 'ready') { asrDevice = m.device; waiters.asr?.res(); }
+    if (m.type === 'error') { if (m.fatal) waiters.asr?.rej(new Error(m.message)); else console.warn('asr', m.message); }
+    if (m.type === 'result') onAsrResult(m);
+  };
+}
+/* 中文離線辨識（SenseVoice）支援的說話語言；其他語言自動改用 Whisper */
+const SENSE_LANGS = new Set(['zh', 'en', 'ja', 'ko']);
+const useSense = () => $('engine').value === 'sense' && SENSE_LANGS.has($('srcLang').value);
+const asrId = () => useSense() ? 'sense:' + $('srcLang').value : $('quality').value;
+let asrReady = null, mtReady = null, asrDevice = 'wasm', chromeTr = null, mtEngine = null;
+const files = new Map(); // 下載進度
+let waiters = {};
+function onProgress(p){
+  if (p.file && (p.status === 'initiate' || p.status === 'progress')) $('ovFile').textContent = p.file.split('/').pop();
+  if (p.status === 'progress_total' && p.total) files.set(p.src + p.name, { loaded: p.loaded, total: p.total });
+  else if (p.status === 'progress' && p.total && !files.has(p.src + p.name)) files.set(p.src + p.name + p.file, { loaded: p.loaded, total: p.total });
+  let L = 0, T = 0; for (const f of files.values()) { L += f.loaded; T += f.total; }
+  if (T) {
+    $('ovBar').style.width = (L / T * 100).toFixed(1) + '%';
+    $('ovBytes').textContent = `${(L/1048576).toFixed(0)} / ${(T/1048576).toFixed(0)} MB`;
+  }
+}
+const workersReady = (async () => {
+  whisperW = await mkWorker('asr-worker.js');
+  mtW  = await mkWorker('mt-worker.js');
+  asrW = whisperW; hookAsr(whisperW);
+  mtW.onerror  = e => waiters.mt?.rej(new Error('翻譯引擎無法啟動 ' + (e.message || '')));
+  mtW.onmessage = e => {
+    const m = e.data;
+    if (m.type === 'progress') return onProgress(m);
+    if (m.type === 'ready') waiters.mt?.res();
+    if (m.type === 'error' && m.fatal) waiters.mt?.rej(new Error(m.message));
+    if (m.type === 'result') { const cb = mtCallbacks.get(m.id); mtCallbacks.delete(m.id); cb && cb(m.text); }
+  };
+})();
+workersReady.catch(e => console.warn('worker', e));
+const wait = (name) => new Promise((res, rej) => { waiters[name] = { res, rej }; });
+
+async function loadAsr(){
+  const model = asrId();
+  if (asrReady === model) return;
+  await workersReady;
+  if (useSense()) {
+    if (!senseW) { senseW = new Worker('sense-worker.js'); hookAsr(senseW); }
+    asrW = senseW;
+    $('ovFile').textContent = '中文離線辨識模型（約 240 MB，已內含在資料夾裡）';
+    const p = wait('asr'); senseW.postMessage({ type: 'load' }); await p;
+  } else {
+    asrW = whisperW;
+    const p = wait('asr'); asrW.postMessage({ type: 'load', model }); await p;
+  }
+  asrReady = model; LS.set('asr:' + model);
+}
+function withTimeout(p, ms, onTimeout){
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => { onTimeout?.(); rej(new Error('timeout')); }, ms))]);
+}
+async function loadMt(){
+  const s = $('srcLang').value, t = $('tgtLang').value, sig = routeSig();
+  if (mtReady === sig) return;
+  chromeTr = null; mtEngine = null;
+  if (s === t) { mtEngine = 'same'; mtReady = sig; return; }
+  // 優先用瀏覽器內建的本機翻譯（Chrome 新版，品質較好）
+  if ('Translator' in self) {
+    try {
+      const opt = { sourceLanguage: CHROME_CODE[s], targetLanguage: CHROME_CODE[t] };
+      const av = await withTimeout(Translator.availability(opt), 8000);
+      if (av !== 'unavailable') {
+        const ac = new AbortController();
+        // 內建翻譯偶爾會沒有回應；超過時間就改用開源翻譯模型，不讓畫面卡住
+        chromeTr = await withTimeout(Translator.create({ ...opt, signal: ac.signal, monitor(m){ m.addEventListener('downloadprogress', ev => {
+          $('ovFile').textContent = '瀏覽器內建翻譯語言包'; $('ovBar').style.width = (ev.loaded * 100).toFixed(0) + '%'; }); } }),
+          av === 'available' ? 15000 : 90000, () => ac.abort());
+        await withTimeout(chromeTr.translate('Hello.'), 15000);
+        mtEngine = 'chrome'; mtReady = sig; LS.set('mt:' + sig); return;
+      }
+    } catch (_) { chromeTr = null; $('ovFile').textContent = '改用開源翻譯模型'; $('ovBar').style.width = '0'; }
+  }
+  await workersReady;
+  const p = wait('mt'); mtW.postMessage({ type: 'load', steps: opusSteps(s, t), sig }); await p;
+  mtEngine = 'opus'; mtReady = sig; LS.set('mt:' + sig);
+}
+async function prepare(mtOnly){
+  const ov = $('ov'); ov.classList.add('show'); $('ovErr').textContent = ''; $('ovClose').style.display = 'none';
+  if (mtOnly === true || SANDBOXED) mtOnly = true; else mtOnly = false;
+  const cached = !SANDBOXED && (mtOnly || LS.k[asrKey()]) && LS.k['mt:' + routeSig()];
+  $('ovTitle').textContent = SANDBOXED ? '載入翻譯模型中…' : cached ? '載入本機模型中…' : '下載離線模型中（只需一次）';
+  $('ovDesc').textContent = SANDBOXED ? '分享網址無法保存模型，這次載入只在這個分頁有效（需要網路）。' : cached ? '從這台電腦的快取載入，不需要網路。' : '模型會存在這台電腦的瀏覽器裡，之後不必再下載，也能完全離線使用。請保持此頁開著。';
+  files.clear(); $('ovBar').style.width = '0'; $('ovBytes').textContent = ''; $('ovFile').innerHTML = '&nbsp;';
+  ['stAsr','stMt'].forEach(i => $(i).className = '');
+  $('prep').disabled = $('start').disabled = true;
+  try {
+    await workersReady;
+    const chromeEng = $('engine').value === 'chrome' && SpeechRec;
+    if (!mtOnly && chromeEng) {
+      $('stAsr').className = 'doing';
+      const ok = await installChromeLocal();
+      $('stAsr').className = ok ? 'done' : '';
+      $('stAsr').textContent = ok ? '語音辨識：Chrome 本機辨識（可離線）' : '語音辨識：這台電腦的 Chrome 沒有離線辨識，斷網時請改用 Whisper';
+    } else {
+      $('stAsr').textContent = '語音辨識模型';
+      if (!mtOnly) { $('stAsr').className = 'doing'; await loadAsr(); } $('stAsr').className = mtOnly ? '' : 'done';
+    }
+    $('stMt').className = 'doing'; await loadMt(); $('stMt').className = 'done';
+    ov.classList.remove('show');
+    updateReady();
+    return true;
+  } catch (e) {
+    $('ovTitle').textContent = '模型載入失敗';
+    $('ovErr').textContent = (navigator.onLine ? '' : '目前沒有網路，而這個語言組合的模型還沒下載過。請連上網路後再按一次「下載離線模型」。\n\n') + '詳細：' + e.message;
+    $('ovClose').style.display = 'inline-block';
+    return false;
+  } finally { $('prep').disabled = $('start').disabled = false; }
+}
+$('ovClose').onclick = () => $('ov').classList.remove('show');
+function asrKey(){ return ($('engine').value === 'chrome' && SpeechRec) ? 'asr:chrome:' + $('srcLang').value : 'asr:' + asrId(); }
+function updateUi(){
+  if ($('engine').value === 'chrome' && !SpeechRec) $('engine').value = 'sense';
+  $('qualityWrap').style.display = ($('engine').value === 'whisper' || ($('engine').value === 'sense' && !useSense())) ? '' : 'none';
+  updateReady();
+}
+function updateReady(){
+  const b = $('readyBadge');
+  if (SANDBOXED) { b.textContent = mtReady ? '分享網址：打字翻譯可用' : '分享網址：只能打字翻譯'; b.className = 'badge warn'; return; }
+  const ok = LS.k[asrKey()] && LS.k['mt:' + routeSig()];
+  const chromeEng = $('engine').value === 'chrome' && SpeechRec;
+  b.textContent = ok ? '✓ 可離線使用' + (chromeEng ? '' : asrReady ? (asrDevice === 'sense' ? '・中文離線辨識' : asrDevice === 'webgpu' ? '・GPU 加速' : '・CPU') : '') : (chromeEng ? '連網即可使用・離線需先下載' : '此設定尚未下載模型');
+  b.className = 'badge ' + (ok ? 'ok' : chromeEng ? '' : 'warn'); return;
+  b.className = 'badge ' + (ok ? 'ok' : 'warn');
+}
+
+/* ---------- 翻譯（背景） ---------- */
+let mtSeq = 0; const mtCallbacks = new Map();
+const GT = { zh: 'zh-TW', en: 'en', ja: 'ja', ko: 'ko', fr: 'fr', de: 'de', es: 'es' };
+const useOnline = () => $('trMode').value === 'auto' && navigator.onLine;
+async function googleTr(raw){
+  const s = $('srcLang').value, t = $('tgtLang').value;
+  const u = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${GT[s]}&tl=${GT[t]}&dt=t&q=${encodeURIComponent(raw)}`;
+  const r = await withTimeout(fetch(u), 5000); if (!r.ok) throw new Error('http ' + r.status);
+  const j = await r.json(); return j[0].map(x => x[0]).join('');
+}
+async function translate(raw){
+  raw = displaySrc(raw);
+  const t = $('tgtLang').value;
+  if ($('srcLang').value === t) return raw;
+  if (useOnline()) { try { const g = await googleTr(raw); if (g) return g; } catch (_) {} }
+  if (mtReady !== routeSig()) {
+    try { await loadMt(); } catch (_) { return navigator.onLine ? '（翻譯失敗）' : '（離線翻譯模型還沒下載）'; }
+  }
+  let out;
+  if (mtEngine === 'same') out = raw;
+  else if (mtEngine === 'chrome' && chromeTr) { try { out = await withTimeout(chromeTr.translate(raw), 20000); } catch(_) { out = null; } }
+  else out = await new Promise(res => { const id = ++mtSeq; mtCallbacks.set(id, res); mtW.postMessage({ type: 'translate', id, text: raw }); });
+  if (out == null) return '（翻譯失敗）';
+  return t === 'zh' ? toTW(out) : out;
+}
+
+/* ---------- 專有名詞與修正 ---------- */
+let VOCAB = { phrases: [], fixes: [] };
+function parseVocab(txt){
+  const v = { phrases: [], fixes: [] };
+  txt.split(/\n/).map(x => x.trim()).filter(Boolean).forEach(l => {
+    const m = l.split(/[=＝]/);
+    if (m.length >= 2 && m[0].trim()) { v.fixes.push([m[0].trim(), m.slice(1).join('=').trim()]); v.phrases.push(m.slice(1).join('=').trim()); }
+    else v.phrases.push(l);
+  });
+  return v;
+}
+function loadVocab(){ let t = ''; try { t = localStorage.getItem('lt-vocab') || ''; } catch (_) {} $('vocabIn').value = t; VOCAB = parseVocab(t); }
+function applyFixes(t){ for (const [a, b] of VOCAB.fixes) t = t.split(a).join(b); return t; }
+
+/* ---------- 字幕畫面 ---------- */
+let seq = 0, current = null;
+function pushHistory(srcText, trText){
+  const div = document.createElement('div'); div.className = 'line';
+  div.innerHTML = '<div class="src"></div><div class="tr"></div>';
+  div.querySelector('.src').textContent = srcText; div.querySelector('.tr').textContent = trText;
+  $('history').appendChild(div);
+  while ($('history').children.length > MAX_HISTORY) $('history').firstChild.remove();
+  return div;
+}
+function retireCurrent(){
+  if (!current) return;
+  const el = pushHistory(current.src, current.tr || '…');
+  if (!current.tr) { el.querySelector('.tr').classList.add('pending'); current.histEl = el; }
+  current = null; $('curSrc').textContent = ''; const ct = $('curTr'); ct.textContent = ''; ct.classList.remove('live');
+}
+function displaySrc(raw){ return applyFixes($('srcLang').value === 'zh' ? toTW(raw) : raw); }
+/* 邊講邊翻：講到一半就先翻出暫定譯文（只在翻譯夠快時啟用） */
+let liveGen = 0, liveBusy = false, liveLast = 0, livePending = null;
+const liveFast = () => useOnline() || mtEngine === 'chrome';
+function liveTranslate(raw){
+  if (!liveFast()) return;
+  livePending = raw;
+  if (liveBusy || performance.now() - liveLast < 600) { setTimeout(() => livePending && !liveBusy && liveTranslate(livePending), 650); return; }
+  const text = livePending; livePending = null; liveBusy = true; liveLast = performance.now();
+  const gen = liveGen;
+  translate(text).then(tr => {
+    liveBusy = false;
+    if (gen !== liveGen || current) return;
+    const el = $('curTr'); el.classList.remove('fade'); el.classList.add('live'); el.textContent = tr;
+  });
+}
+function finalizeSentence(raw){
+  raw = raw.trim(); if (!raw) return;
+  liveGen++; livePending = null;
+  retireCurrent();
+  const item = current = { id: ++seq, src: displaySrc(raw), tr: null };
+  $('curSrc').textContent = item.src;
+  if (!$('curTr').classList.contains('live')) $('curTr').textContent = '';
+  setStatus('翻譯中…');
+  translate(raw).then(tr => {
+    item.tr = tr;
+    if (current === item) { const t = $('curTr'); const wasLive = t.classList.contains('live'); t.classList.remove('live'); t.textContent = tr; if (wasLive) return setStatus(running ? '收音中' : '就緒'); t.classList.remove('fade'); void t.offsetWidth; t.classList.add('fade'); }
+    else if (item.histEl) { const t = item.histEl.querySelector('.tr'); t.textContent = tr; t.classList.remove('pending'); }
+    setStatus(running ? '收音中' : '就緒');
+  });
+}
+function showInterim(raw){
+  if (raw && current) retireCurrent();
+  const el = $('curSrc'); el.innerHTML = '';
+  const s = document.createElement('span');
+  if (raw) { s.className = 'interim'; s.textContent = displaySrc(raw); }
+  else { s.className = 'listening'; s.innerHTML = '<b></b><b></b><b></b>'; }
+  el.appendChild(s);
+}
+const setStatus = s => $('status').textContent = s;
+
+/* Whisper 偶爾會在雜音時「腦補」固定句子，過濾掉 */
+const JUNK = /^(thank you\.?|thanks for watching!?|you|bye\.?|謝謝(大家|觀看|收看|收聽)?[。！!]?|谢谢(大家|观看|收看)?[。！!]?|.*(字幕|subtitles).*(提供|製作|制作|by).*|.*(點贊|点赞|訂閱|订阅).*|ご視聴ありがとうございました。?|시청해 주셔서 감사합니다\.?|merci\.?|sous-titr.*|untertitel.*|gracias\.?)$/i;
+function clean(t){
+  t = t.replace(/\[[^\]]*\]|\([^)]*(music|音樂|音乐|笑)[^)]*\)|♪/gi, '').trim();
+  if (!t || /^[\s.,!?。，！？…-]+$/.test(t) || JUNK.test(t)) return '';
+  return t;
+}
+
+/* ---------- 收音 + 斷句（全部在本機） ---------- */
+let running = false, ctx = null, stream = null, node = null;
+let seg = null, segId = 0, silenceMs = 0, speechFrames = 0, noise = 0.004, lastInterim = 0;
+const FRAME = 480; // 30ms @16k
+let frameBuf = new Float32Array(FRAME), frameLen = 0, pre = [], rsPos = 0, rsSum = 0, rsCnt = 0;
+const finalIds = new Set();
+
+function onAsrResult(m){
+  if (m.final) {
+    finalIds.add(m.id);
+    const t = clean(m.text);
+    if (t) finalizeSentence(t);
+    else if (current && !seg) $('curSrc').textContent = current.src;
+    setStatus(running ? `收音中・辨識 ${(m.ms/1000).toFixed(1)} 秒` : '就緒');
+  } else if (!finalIds.has(m.id) && seg && seg.id === m.id) {
+    const t = clean(m.text).replace(/[。．.，,！!？?、]+$/, ''); if (t) showInterim(t);
+  }
+}
+function flushSegment(){
+  if (!seg) return;
+  const len = seg.chunks.reduce((a, c) => a + c.length, 0);
+  const s = seg; seg = null;
+  if (len < SR * 0.45) { if (current) $('curSrc').textContent = current.src; else showInterim(null); return; }
+  const audio = new Float32Array(len); let o = 0; for (const c of s.chunks) { audio.set(c, o); o += c.length; }
+  asrW.postMessage({ type: 'transcribe', id: s.id, final: true, audio, lang: $('srcLang').value }, [audio.buffer]);
+}
+function sendInterim(){
+  const len = seg.chunks.reduce((a, c) => a + c.length, 0);
+  const audio = new Float32Array(len); let o = 0; for (const c of seg.chunks) { audio.set(c, o); o += c.length; }
+  asrW.postMessage({ type: 'transcribe', id: seg.id, final: false, audio, lang: $('srcLang').value }, [audio.buffer]);
+}
+function processFrame(f){
+  let e = 0; for (let i = 0; i < f.length; i++) e += f[i] * f[i];
+  const rms = Math.sqrt(e / f.length);
+  $('meter').style.width = Math.min(100, rms * 900) + '%';
+  const th = Math.max(0.007, noise * 3);
+  const loud = rms > th;
+  if (!seg) {
+    if (!loud) noise = noise * 0.97 + rms * 0.03;
+    pre.push(f); if (pre.length > 10) pre.shift();
+    speechFrames = loud ? speechFrames + 1 : 0;
+    if (speechFrames >= 3) {
+      seg = { id: ++segId, chunks: pre.splice(0), started: performance.now() };
+      silenceMs = 0; lastInterim = performance.now();
+      if (!current) showInterim(null);
+    }
+    return;
+  }
+  seg.chunks.push(f);
+  silenceMs = rms > th * 0.8 ? 0 : silenceMs + 30;
+  const dur = seg.chunks.length * 0.03;
+  if (silenceMs >= +$('pause').value || dur >= 8) { flushSegment(); speechFrames = 0; return; }
+  // GPU 夠快時才顯示即時字（CPU 留給正式辨識）
+  const gap = asrDevice === 'sense' ? 600 : 1000;
+  if ((asrDevice === 'webgpu' || asrDevice === 'sense') && performance.now() - lastInterim > gap && dur > 0.6) { lastInterim = performance.now(); sendInterim(); }
+}
+function onAudio(chunk, rate){
+  const step = SR / rate;
+  for (let i = 0; i < chunk.length; i++) {
+    rsSum += chunk[i]; rsCnt++; rsPos += step;
+    if (rsPos >= 1) {
+      rsPos -= 1; frameBuf[frameLen++] = rsSum / rsCnt; rsSum = 0; rsCnt = 0;
+      if (frameLen === FRAME) { processFrame(frameBuf); frameBuf = new Float32Array(FRAME); frameLen = 0; }
+    }
+  }
+}
+const WORKLET = `class Cap extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(2048);this.n=0}
+process(i){const c=i[0]&&i[0][0];if(c){for(let k=0;k<c.length;k++){this.b[this.n++]=c[k];if(this.n===2048){this.port.postMessage(this.b);this.b=new Float32Array(2048);this.n=0}}}return true}}
+registerProcessor('cap',Cap)`;
+
+/* ---------- Chrome 語音辨識（串流，邊講邊出字） ---------- */
+const SpeechRec = self.SpeechRecognition || self.webkitSpeechRecognition;
+const BCP = { zh: 'zh-TW', en: 'en-US', ja: 'ja-JP', ko: 'ko-KR', fr: 'fr-FR', de: 'de-DE', es: 'es-ES' };
+let rec = null, recLocal = false;
+async function chromeLocalState(){
+  if (!SpeechRec?.available) return 'unavailable';
+  try { return await withTimeout(SpeechRec.available({ langs: [BCP[$('srcLang').value]], processLocally: true }), 5000); } catch (_) { return 'unavailable'; }
+}
+async function installChromeLocal(){
+  const st = await chromeLocalState();
+  if (st === 'available') { LS.set('asr:chrome:' + $('srcLang').value); return true; }
+  if (st === 'unavailable' || !navigator.onLine) return false;
+  $('ovFile').textContent = 'Chrome 語音辨識語言包（下載中，請稍候）';
+  try {
+    const ok = await withTimeout(SpeechRec.install({ langs: [BCP[$('srcLang').value]], processLocally: true }), 300000);
+    if (ok || (await chromeLocalState()) === 'available') { LS.set('asr:chrome:' + $('srcLang').value); return true; }
+  } catch (_) {}
+  return false;
+}
+async function startChrome(){
+  // 有網路時用雲端辨識（中文準確很多）；斷網才用 Chrome 本機辨識
+  recLocal = !navigator.onLine && (await chromeLocalState()) === 'available';
+  if (!recLocal && !navigator.onLine) {
+    setStatus('沒有網路，已改用「中文離線辨識」，請再按一次「▶ 開始收音」');
+    $('engine').value = 'sense'; updateUi(); return false;
+  }
+  rec = new SpeechRec();
+  rec.lang = BCP[$('srcLang').value]; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  if (recLocal) { try { rec.processLocally = true; } catch (_) {} }
+  if (VOCAB.phrases.length && self.SpeechRecognitionPhrase && 'phrases' in rec) {
+    try { rec.phrases = VOCAB.phrases.slice(0, 100).map(p => new SpeechRecognitionPhrase(p, 5.0)); } catch (_) {}
+  }
+  rec.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i], t = r[0].transcript;
+      if (r.isFinal) finalizeSentence(t); else interim += t;
+    }
+    if (interim.trim()) { showInterim(interim.trim()); liveTranslate(interim.trim()); }
+  };
+  rec.onaudiostart = () => setStatus('收音中・Chrome 語音辨識' + (recLocal ? '（本機，可離線）' : '（雲端，需要網路）'));
+  rec.onerror = e => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { setStatus('無法使用麥克風：請允許麥克風權限'); stop(); }
+    else if (e.error === 'network') setStatus('網路中斷，正在重試…（斷網請改用中文離線辨識）');
+    else if (e.error === 'language-not-supported') { setStatus('Chrome 不支援這個語言的辨識，請改用「中文離線辨識」或 Whisper 模型'); stop(); }
+  };
+  // Chrome 每隔一段時間會自己停掉，收音中就自動接上
+  rec.onend = () => { if (running && rec) setTimeout(() => { try { running && rec.start(); } catch (_) {} }, 150); };
+  let heard = false; const prevAS = rec.onaudiostart;
+  rec.onaudiostart = () => { heard = true; prevAS(); };
+  setStatus('連接 Chrome 語音辨識中…');
+  setTimeout(() => { if (running && rec && !heard) setStatus('Chrome 語音辨識沒有回應：請確認是用 Chrome 或 Edge 開啟，或改用「中文離線辨識」'); }, 7000);
+  rec.start();
+  return true;
+}
+async function start(){
+  if (SANDBOXED) { $('sbx').classList.add('show'); return; }
+  if ($('engine').value === 'chrome' && SpeechRec) {
+    if (!useOnline() && mtReady !== routeSig()) { if (!await prepare(true)) return; }
+    running = true;
+    if (!await startChrome()) { running = false; return; }
+    $('dot').classList.add('on'); $('start').textContent = '■ 停止';
+    if (!current) showInterim(null);
+    return;
+  }
+  if (!(asrReady === asrId() && mtReady === routeSig())) { if (!await prepare()) return; }
+  asrW = useSense() ? senseW : whisperW;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+  } catch (e) { setStatus('無法使用麥克風：請允許麥克風權限'); return; }
+  ctx = new AudioContext();
+  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' })));
+  const src = ctx.createMediaStreamSource(stream);
+  node = new AudioWorkletNode(ctx, 'cap');
+  node.port.onmessage = e => running && onAudio(e.data, ctx.sampleRate);
+  src.connect(node);
+  const mute = ctx.createGain(); mute.gain.value = 0; node.connect(mute).connect(ctx.destination);
+  running = true; seg = null; pre = []; speechFrames = 0;
+  $('dot').classList.add('on'); $('start').textContent = '■ 停止';
+  if (!current) showInterim(null);
+  setStatus('收音中' + (asrDevice === 'sense' ? '・中文離線辨識' : asrDevice === 'webgpu' ? '（GPU 加速）' : '（CPU）'));
+}
+function stop(){
+  running = false;
+  if (rec) { const r = rec; rec = null; try { r.stop(); } catch (_) {} }
+  flushSegment();
+  stream?.getTracks().forEach(t => t.stop()); ctx?.close(); ctx = null;
+  $('dot').classList.remove('on'); $('start').textContent = '▶ 開始收音'; $('meter').style.width = '0';
+  if (!current) $('curSrc').textContent = '';
+  setStatus('已停止');
+}
+
+/* ---------- 控制 ---------- */
+$('start').onclick = () => running ? stop() : start();
+$('prep').onclick = () => prepare();
+const NAMES = { zh: '中文', en: 'English', ja: '日本語', ko: '한국어', fr: 'Français', de: 'Deutsch', es: 'Español' };
+const SAVE_IDS = ['srcLang','tgtLang','quality','engine','trMode','pause','size','theme'];
+function saveSettings(){ try { const o = {}; SAVE_IDS.forEach(id => o[id] = $(id).value); o.v4 = 1; localStorage.setItem('lt-settings', JSON.stringify(o)); } catch (_) {} }
+function loadSettings(){
+  let o = {}; try { o = JSON.parse(localStorage.getItem('lt-settings') || '{}'); } catch (_) {}
+  // v4：舊設定的辨識引擎改成新的「中文離線辨識」（之後使用者自己改的會記住）
+  if (!o.v4) { delete o.engine; o.v4 = 1; }
+  SAVE_IDS.forEach(id => { if (o[id] != null && [...($(id).options || [])].some(x => x.value === o[id]) || (id === 'size' && o[id])) $(id).value = o[id]; });
+}
+function updateDir(){ $('dirBadge').textContent = '🎤 ' + NAMES[$('srcLang').value] + ' → ' + NAMES[$('tgtLang').value]; }
+$('swap').onclick = () => { const a = $('srcLang').value; $('srcLang').value = $('tgtLang').value; $('tgtLang').value = a; $('srcLang').onchange(); };
+$('vocabBtn').onclick = () => $('vocab').classList.add('show');
+$('vocabSave').onclick = () => { try { localStorage.setItem('lt-vocab', $('vocabIn').value); } catch (_) {} VOCAB = parseVocab($('vocabIn').value); $('vocab').classList.remove('show'); if (running) { stop(); start(); } };
+['pause','size','theme'].forEach(id => $(id).addEventListener('change', saveSettings));
+['srcLang','tgtLang','quality','engine','trMode'].forEach(id => $(id).onchange = async () => {
+  if (id === 'srcLang' && $('srcLang').value === 'zh' && $('quality').value.endsWith('whisper-base')) $('quality').value = 'onnx-community/whisper-small';
+  updateUi(); updateDir(); saveSettings();
+  if (running) { stop(); await start(); }
+});
+$('typeBtn').onclick = () => { if (SANDBOXED) $('typer').classList.add('show'); else $('typer').classList.toggle('show'); $('typeIn').focus(); };
+$('typeIn').onkeydown = async e => {
+  if (e.key !== 'Enter' || !e.target.value.trim()) return;
+  const v = e.target.value; e.target.value = '';
+  if (!useOnline() && mtReady !== routeSig()) { if (!await prepare(true)) return; }
+  finalizeSentence(v);
+};
+$('clear').onclick = () => { $('history').innerHTML = ''; $('curSrc').textContent = ''; $('curTr').textContent = ''; current = null; };
+$('size').oninput = e => {
+  document.documentElement.style.setProperty('--fs-src', 2.1 * e.target.value + 'rem');
+  document.documentElement.style.setProperty('--fs-tr', 3 * e.target.value + 'rem');
+};
+$('theme').onchange = e => { document.body.classList.remove('light','chroma'); if (e.target.value !== 'dark') document.body.classList.add(e.target.value); };
+$('present').onclick = () => {
+  document.body.classList.toggle('present');
+  if (document.body.classList.contains('present')) document.documentElement.requestFullscreen?.().catch(()=>{});
+  else if (document.fullscreenElement) document.exitFullscreen?.();
+};
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) document.body.classList.remove('present'); });
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.code === 'Space') { e.preventDefault(); $('start').click(); }
+  if (e.key === 'f' || e.key === 'F') $('present').click();
+});
+if (!window.AudioWorkletNode || !navigator.mediaDevices || SANDBOXED) $('typer').classList.add('show');
+$('zipLink').href = new URL('../live-translate-offline.zip', location.href).href;
+$('sbxClose').onclick = () => $('sbx').classList.remove('show');
+loadSettings(); loadVocab();
+if ($('srcLang').value === 'zh' && $('quality').value.endsWith('whisper-base')) $('quality').value = 'onnx-community/whisper-small';
+$('size').oninput({ target: $('size') }); $('theme').onchange({ target: $('theme') });
+if (!SpeechRec) { $('engine').value = 'whisper'; $('engine').options[0].disabled = true; }
+updateUi(); updateDir();
+if (SANDBOXED) {
+  $('curSrc').innerHTML = '<span class="hint">這個分享網址不能使用麥克風，也無法離線保存模型。<br>可以先用 ⌨ 打字翻譯試用；要即時收音請按「▶ 開始收音」看本機版下載方式。</span>';
+  $('prep').textContent = '⬇ 載入翻譯模型';
+}
+window.__lt = { finalizeSentence, prepare, state: () => ({ asrReady, mtReady, mtEngine, asrDevice }) };
+</script>
+<style id="classic-appearance-update-v1">
+/* classic-appearance-update-v1 */
+:root{--sans:"Noto Serif TC","Songti TC","PMingLiU","SimSun",serif;--serif:var(--sans);--bg1:#241a13;--bg2:#3b2b1d;--text:#faefd9;--muted:#d0b996;--accent:#dfbf7e;--accent2:#b48a49;--card:rgba(255,242,216,.06)}
+body{background:var(--bg1);font-family:var(--serif);-webkit-font-smoothing:antialiased}
+body.light{--bg1:#f6ecdc;--bg2:#f3e6cd;--text:#352315;--muted:#7b6247;--accent:#805c2c;--accent2:#a9864a;--card:rgba(255,253,245,.88);background:#f6ecdc}
+.bar,body.light .bar{background:var(--bg1);border-bottom:1px solid var(--accent2);padding:14px 22px;gap:10px;box-shadow:0 7px 22px #23180f12}
+body,button,select,input,textarea,.current .src,.current .tr,.line .src,.line .tr{font-family:var(--serif)!important}
+.brand{font-weight:700;letter-spacing:.08em;gap:9px;font-size:17px}.badge{font-size:11px;padding:4px 9px;border-color:var(--accent2);color:var(--muted)}.badge.ok{color:var(--accent)}.badge.warn{color:var(--muted);border-color:var(--accent2)}
+button,select,body.light button,body.light select{min-height:40px;padding:9px 14px;font-size:14px;letter-spacing:.04em;border:1px solid var(--accent2);border-radius:9px;background:var(--card);color:var(--text);box-shadow:inset 0 1px 0 #ffffff16;transition:background .15s,transform .15s}
+button:hover:not(:disabled){background:color-mix(in srgb,var(--accent2) 18%,var(--bg1))}button:active:not(:disabled){transform:translateY(1px)}button.primary{background:linear-gradient(#6a482a,#3b2617);border:1px solid #c3a064;color:#f7e2b4;font-weight:700;padding-inline:20px;box-shadow:inset 0 1px 0 #e7cd9540,0 3px 9px #23180f20}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--accent2);outline-offset:3px}select option{color:#352315;background:#fff9ed}label.sm{font-size:12px;gap:7px}input[type=range]{accent-color:var(--accent2)}
+.current{border:1px solid var(--accent2);border-image:none;border-radius:14px;background:var(--card);padding:26px 30px;box-shadow:0 20px 48px -32px #2a1a1050}.current .src{font-weight:400;line-height:1.65}.current .tr{background:none;color:var(--text);line-height:1.5;font-weight:700}.line .src,.line .tr{line-height:1.6}.hint{font-size:16px;line-height:1.85}
+.panel{background:var(--bg1);color:var(--text);border:1px solid var(--accent2);box-shadow:0 24px 80px #160d0740;max-height:90vh;overflow:auto}.panel p,.steps,.prog-row{color:var(--muted);line-height:1.8}#vocabIn{background:var(--card);color:var(--text);border-color:var(--accent2);line-height:1.8}.overlay{background:#20150c99}.status{color:var(--muted)}.typer input{border-color:var(--accent2);color:var(--text)}
+body:not(.present) .stage{padding-top:calc(var(--classic-bar-height,160px) + 24px)}
+@media(max-width:700px){.bar,body.light .bar{padding:12px;gap:8px}.brand{width:100%;flex-wrap:wrap;font-size:15px}button,select{min-height:42px;font-size:13px;padding:8px 11px}.stage{padding-inline:18px}.current{padding:20px}.current .src{overflow-wrap:anywhere}.current .tr{overflow-wrap:anywhere}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+<script id="classic-appearance-height-v1">(()=>{const bar=document.querySelector('.bar');if(!bar)return;const update=()=>document.documentElement.style.setProperty('--classic-bar-height',bar.getBoundingClientRect().height+'px');new ResizeObserver(update).observe(bar);update();})();</script>
+<style id="separate-admin-v1">.bar{display:none!important}.stage{padding-top:36px!important}#adminEntry{position:fixed;top:14px;right:18px;z-index:15;font:14px serif;color:var(--text);background:var(--bg1);border:1px solid var(--accent2);border-radius:8px;padding:8px 14px;text-decoration:none}body.present #adminEntry{opacity:0}body.present #adminEntry:focus,body.present #adminEntry:hover{opacity:1}</style>
+<a id="adminEntry" href="admin.html" target="_blank" rel="noopener">控制後臺 ↗</a>
+<script>
+(()=>{
+ const KEY='lt-cloud-view-v1';
+ const ids=['srcLang','tgtLang','engine','trMode','quality','pause','size','theme'];
+ function publish(){const controls={};for(const id of ids)controls[id]=document.getElementById(id).value;localStorage.setItem(KEY+'-state',JSON.stringify({controls,running,status:document.getElementById('status').textContent}));}
+ function appearance(a){if(!a)return;let style=document.getElementById('adminAppearance');if(!style){style=document.createElement('style');style.id='adminAppearance';document.head.append(style);}const align=['left','center','right'].includes(a.align)?a.align:'left';const color=x=>/^#[0-9a-f]{6}$/i.test(x||'')?x:null;style.textContent='.current,.line{text-align:'+align+'}'+(a.font==='sans'?'body,.current .src,.current .tr,.line .src,.line .tr{font-family:"Microsoft JhengHei",sans-serif!important}': 'body,.current .src,.current .tr,.line .src,.line .tr{font-family:"Noto Serif TC","PMingLiU","SimSun",serif!important}')+(color(a.text)?'.current .tr,.line .tr{color:'+a.text+'!important}':'')+(color(a.background)?'body:not(.chroma){background:'+a.background+'!important}':'');}
+ let applied=null;
+ function apply(data){if(!data)return;for(const id of ids){if(data.controls?.[id]!=null){const el=document.getElementById(id);if([...el.options||[]].length && ![...el.options].some(o=>o.value===String(data.controls[id])))continue;if(el.value!==String(data.controls[id])){el.value=data.controls[id];el.dispatchEvent(new Event(id==='size'?'input':'change',{bubbles:true}));}}}appearance(data.appearance);const c=data.contexts?.find(c=>c.id===data.active);if(c&&JSON.stringify(c)!==applied){applied=JSON.stringify(c);document.getElementById('vocabIn').value=c.words;document.getElementById('vocabSave').click();}}
+ addEventListener('storage',e=>{try{if(e.key===KEY)apply(JSON.parse(e.newValue));if(e.key===KEY+'-command'){const c=JSON.parse(e.newValue);if(c.action==='start'&&!running)document.getElementById('start').click();if(c.action==='stop'&&running)document.getElementById('start').click();if(c.action==='clear')document.getElementById('clear').click();if(c.action==='present')document.getElementById('present').click();setTimeout(publish,200);}}catch(e){console.warn('admin sync failed');}});
+ try{apply(JSON.parse(localStorage.getItem(KEY)||'null'));publish();}catch(e){}
+ let timer;new MutationObserver(()=>{clearTimeout(timer);timer=setTimeout(publish,100);}).observe(document.getElementById('status'),{childList:true,subtree:true,characterData:true});
+ document.querySelector('.bar').addEventListener('change',()=>setTimeout(publish,100));
+})();
+</script>
+<style id="front-record-controls-v1">
+#frontRecord{position:fixed;left:20px;top:14px;z-index:16;display:flex;gap:10px}
+#frontRecord button{font:600 15px/1.5 "Noto Serif TC","PMingLiU",serif;letter-spacing:.06em;padding:10px 18px;min-height:44px;border:1px solid var(--accent2,#b48a49);border-radius:9px;background:#49301d;color:#f7e2b4;cursor:pointer}
+#frontRecord button:focus-visible{outline:3px solid #cba565;outline-offset:3px}#frontRecord button:disabled{opacity:.5;cursor:default}
+#frontRecordStop{background:#783e2c!important}body.present #frontRecord{opacity:0;transition:opacity .15s}body.present #frontRecord:hover,body.present #frontRecord:focus-within{opacity:1}
+.stage{padding-top:82px!important}@media(max-width:600px){#frontRecord{left:12px;top:12px;gap:6px}#frontRecord button{padding:9px 12px;font-size:13px}#adminEntry{right:12px;top:14px}}
+</style>
+<div id="frontRecord" role="group" aria-label="收音控制"><button id="frontRecordStart" type="button">開始收音</button><button id="frontRecordStop" type="button" disabled>停止收音</button></div>
+<script>
+(()=>{
+ const startButton=document.getElementById('frontRecordStart'),stopButton=document.getElementById('frontRecordStop');
+ const original=document.getElementById('start');
+ function sync(){startButton.disabled=running;stopButton.disabled=!running;}
+ startButton.onclick=()=>{if(!running){original.click();setTimeout(sync,100);}};
+ stopButton.onclick=()=>{if(running){original.click();setTimeout(sync,100);}};
+ new MutationObserver(sync).observe(original,{childList:true,subtree:true,characterData:true});sync();
+})();
+</script>
+<script id="front-glossary-v1">
+(()=>{
+ const baseTranslate=translate;
+ function mappings(){try{const d=JSON.parse(localStorage.getItem('lt-cloud-view-v1')||'null');const c=d?.contexts?.find(x=>x.id===d.active);if(!c||c.glossaryFrom!==document.getElementById('srcLang').value||c.glossaryTo!==document.getElementById('tgtLang').value)return [];return (c.glossaryText||'').split(/\r?\n/).map(x=>{const i=x.indexOf('=');return i>0?[x.slice(0,i).trim(),x.slice(i+1).trim()]:null;}).filter(x=>x&&x[0]&&x[1]).sort((a,b)=>b[0].length-a[0].length);}catch(e){return [];}}
+ const escape=x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+ translate=async function(raw){
+ const pairs=mappings();if(!pairs.length)return baseTranslate(raw);
+ const text=displaySrc(raw);const map=new Map(pairs);const pattern=new RegExp(pairs.map(([a])=>/^[A-Za-z0-9_]+$/.test(a)?'(?<![\\p{L}\\p{N}_])'+escape(a)+'(?![\\p{L}\\p{N}_])':escape(a)).join('|'),'gu');
+ const matches=[...text.matchAll(pattern)];if(!matches.length)return baseTranslate(raw);
+ if(matches.length===1&&matches[0][0]===text)return map.get(text);
+ const prefix='ZXQ'+crypto.randomUUID().replaceAll('-','').toUpperCase();const terms=[];
+ const protectedText=text.replace(pattern,word=>{const mark=prefix+'T'+terms.length+'QXZ';terms.push({mark,target:map.get(word)});return mark;});
+ const result=await baseTranslate(protectedText);
+ if(terms.every(t=>result.includes(t.mark))){let output=result;for(const t of terms)output=output.split(t.mark).join(t.target);return output;}
+ // When a translator changes placeholders, translate surrounding segments separately.
+ const output=[];let cursor=0;
+ for(const m of matches){const part=text.slice(cursor,m.index);if(part)output.push(/^\s*$/.test(part)?part:await baseTranslate(part));output.push(map.get(m[0]));cursor=m.index+m[0].length;}
+ const tail=text.slice(cursor);if(tail)output.push(/^\s*$/.test(tail)?tail:await baseTranslate(tail));return output.join('');
+ };
+})();
+</script>
+<script defer src="./cloud-frontend.js"></script>
+</body>
+</html>

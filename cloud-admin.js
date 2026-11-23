@@ -1,0 +1,19 @@
+(()=>{
+ const VIEW='lt-cloud-view-v1';let authorized=false,working=false;
+ const section=document.createElement('section');section.className='card';section.id='cloudManager';section.innerHTML='<h2>雲端登入與發布</h2><p>先儲存目前語境，再儲存雲端草稿，最後確認並發布。只有發布後，其他使用者才會收到詞庫；完整原文不公開。</p><form id="cloudLogin"><label>管理者信箱<input id="cloudEmail" type="email" autocomplete="username" required></label><label>密碼<input id="cloudPassword" type="password" autocomplete="current-password" required></label><button class="primary" type="submit">登入</button></form><div id="cloudActions" hidden><div class="row"><button id="saveCloudDrafts" type="button">儲存雲端草稿</button><button id="loadCloudDrafts" type="button">下載雲端草稿</button><button id="publishCloud" type="button" class="primary">發布詞庫</button><button id="cloudLogout" type="button">登出</button></div><p>「儲存雲端草稿」會以本機的語境清單取代全部雲端草稿（包含刪除項目），不影響上一版公開詞庫。其他裝置若有同時編輯，請先協調。</p></div><div id="cloudStatus" role="status"></div>';
+ document.querySelector('main').prepend(section);const el=id=>document.getElementById(id);const status=t=>el('cloudStatus').textContent=t;
+ const contextCard=el('saveContext').closest('section');const wrapper=document.createElement('fieldset');wrapper.style.cssText='border:0;padding:0;margin:0;min-width:0';while(contextCard.firstChild)wrapper.append(contextCard.firstChild);contextCard.append(wrapper);
+ function authUI(on){authorized=on;wrapper.disabled=!on;el('cloudLogin').hidden=on;el('cloudActions').hidden=!on;}
+ async function api(action,payload={}){const r=await fetch('/api/cloud',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({action,...payload})});let d;try{d=await r.json();}catch{throw Error('服務尚未部署或暫時無法連線');}if(!r.ok){if(r.status===401)authUI(false);throw Error(d.error||'操作未完成');}return d;}
+ async function job(fn){if(working)return;working=true;for(const b of section.querySelectorAll('button'))b.disabled=true;try{await fn();}catch(e){status(e.message);}finally{working=false;for(const b of section.querySelectorAll('button'))b.disabled=false;}}
+ el('cloudLogin').onsubmit=e=>{e.preventDefault();const email=el('cloudEmail').value,password=el('cloudPassword').value;el('cloudPassword').value='';job(async()=>{await api('login',{email,password});authUI(true);status('已登入管理者帳號。若要沿用此電腦的舊語境，請先檢查清單再儲存雲端草稿。');});};
+ el('saveCloudDrafts').onclick=()=>{if(!confirm('要以目前已儲存的本機語境清單，取代全部雲端草稿嗎？'))return;job(async()=>{await api('save',{contexts:data.contexts});status('雲端草稿已儲存；尚未發布。');});};
+ el('loadCloudDrafts').onclick=()=>{if(!confirm('下載將取代此電腦目前的語境清單。是否繼續？'))return;job(async()=>{const r=await api('drafts');if(!r.contexts.length){status('雲端還沒有草稿，保留本機語境。');return;}data.contexts=r.contexts;data.active=data.contexts[0].id;persist();render();status('已下載私人草稿。');});};
+ el('publishCloud').onclick=()=>{if(!confirm('發布全部已儲存的雲端草稿？名稱、詞彙與翻譯對照將公開；完整原文不公開。未儲存到雲端的修改不會發布。'))return;job(async()=>{const r=await api('publish');status('已發布詞庫版本 '+r.version+'。其他前臺約 30 秒內檢查更新，收音中會延後套用。');});};
+ el('cloudLogout').onclick=()=>job(async()=>{await api('logout');authUI(false);status('已登出。');});
+ function view(){try{return JSON.parse(localStorage.getItem(VIEW)||'null')||{controls:{},appearance:{},contexts:[],active:''};}catch{return {controls:{},appearance:{},contexts:[],active:''};}}
+ const oldSave=el('saveControls').onclick;el('saveControls').onclick=()=>{oldSave();const d=view();d.controls={...data.controls};d.appearance={...data.appearance};localStorage.setItem(VIEW,JSON.stringify(d));};
+ for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{localStorage.setItem(VIEW+'-command',JSON.stringify({action:b.dataset.action,id:crypto.randomUUID()}));notice('已送出此瀏覽器的控制指令。');};
+ addEventListener('storage',e=>{if(e.key===VIEW+'-state'){try{live(JSON.parse(e.newValue));}catch{}}});
+ authUI(false);job(async()=>{await api('session');authUI(true);status('已登入，可管理雲端草稿與發布。');});
+})();
